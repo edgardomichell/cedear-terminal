@@ -33,7 +33,8 @@ if "watchlist" not in st.session_state:
 @st.cache_data(ttl=600)
 def descargar_datos(tickers):
     tickers_clean = sorted(list(set([t.upper().strip() for t in tickers if t])))
-    return yf.download(tickers_clean, period="6mo", group_by="ticker", threads=True, progress=False)
+    # Se amplía a 1 año para tener suficiente historial para la EMA 150
+    return yf.download(tickers_clean, period="1y", group_by="ticker", threads=True, progress=False)
 
 def procesar_indicadores(datos, tickers):
     filas = []
@@ -46,7 +47,7 @@ def procesar_indicadores(datos, tickers):
             else:
                 df = datos.dropna()
 
-            if len(df) < 35:
+            if len(df) < 150:
                 continue
 
             close = df['Close']
@@ -78,11 +79,14 @@ def procesar_indicadores(datos, tickers):
             else:
                 macd_txt = "🔴 Bajista"
 
-            # Medias Móviles 21 y 30
+            # Medias Móviles 21, 30 y EMA 150
             sma21 = close.rolling(21).mean().iloc[-1]
             sma30 = close.rolling(30).mean().iloc[-1]
+            ema150 = close.ewm(span=150, adjust=False).mean().iloc[-1]
+
             dist_ma21 = ((precio - sma21) / sma21) * 100
             dist_ma30 = ((precio - sma30) / sma30) * 100
+            dist_ema150 = ((precio - ema150) / ema150) * 100
 
             # Tendencia
             if precio > sma21 and sma21 > sma30:
@@ -133,6 +137,7 @@ def procesar_indicadores(datos, tickers):
                 "Manos Grandes": manos_grandes,
                 "Dist. MA21 %": round(dist_ma21, 2),
                 "Dist. MA30 %": round(dist_ma30, 2),
+                "Dist. EMA150 %": round(dist_ema150, 2),
                 "Oportunidad": oportunidad
             })
         except Exception:
@@ -153,8 +158,8 @@ with tab_volatiles:
     st.subheader("Top 100 CEDEARs con Mayor Volatilidad del Mercado")
     if not df_master.empty:
         df_vol = df_master.sort_values(by="Volatilidad (20d) %", ascending=False).head(100)
-        st.caption("💡 *Hacé clic sobre la cabecera de cualquier columna para ordenar los datos.*")
-        st.dataframe(df_vol, use_container_width=True, hide_index=True)
+        st.caption("💡 *Hacé clic sobre la cabecera de cualquier columna para ordenar. Los encabezados se mantienen fijos al scrollear.*")
+        st.dataframe(df_vol, use_container_width=True, hide_index=True, height=600)
 
 with tab_watchlist:
     st.subheader("Mi Lista de Seguimiento Personalizada")
@@ -172,7 +177,7 @@ with tab_watchlist:
 
     df_watch = df_master[df_master["Ticker"].isin(st.session_state["watchlist"])].copy()
     if not df_watch.empty:
-        st.caption("💡 *Hacé clic sobre la cabecera de cualquier columna para ordenar los datos.*")
-        st.dataframe(df_watch, use_container_width=True, hide_index=True)
+        st.caption("💡 *Hacé clic sobre la cabecera de cualquier columna para ordenar. Los encabezados se mantienen fijos al scrollear.*")
+        st.dataframe(df_watch, use_container_width=True, hide_index=True, height=600)
     else:
         st.info("No hay tickers en tu watchlist.")
