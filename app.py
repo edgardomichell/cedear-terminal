@@ -5,7 +5,7 @@ import numpy as np
 
 st.set_page_config(page_title="Analizador de CEDEARs", layout="wide")
 
-st.title("📊 Analizador & Escáner de CEDEARs (Tiempo Real)")
+st.title("📊 Analizador & Escáner de CEDEARs con Filtros Avanzados")
 
 # --- 1. LISTA DE TICKERS ---
 WATCHLIST_INICIAL = [
@@ -33,7 +33,6 @@ if "watchlist" not in st.session_state:
 @st.cache_data(ttl=600)
 def descargar_datos(tickers):
     tickers_clean = sorted(list(set([t.upper().strip() for t in tickers if t])))
-    # Se amplía a 1 año para tener suficiente historial para la EMA 150
     return yf.download(tickers_clean, period="1y", group_by="ticker", threads=True, progress=False)
 
 def procesar_indicadores(datos, tickers):
@@ -79,7 +78,7 @@ def procesar_indicadores(datos, tickers):
             else:
                 macd_txt = "🔴 Bajista"
 
-            # Medias Móviles 21, 30 y EMA 150
+            # Medias Móviles
             sma21 = close.rolling(21).mean().iloc[-1]
             sma30 = close.rolling(30).mean().iloc[-1]
             ema150 = close.ewm(span=150, adjust=False).mean().iloc[-1]
@@ -144,22 +143,63 @@ def procesar_indicadores(datos, tickers):
             continue
     return pd.DataFrame(filas)
 
-# --- 3. PROCESAMIENTO GENERAL ---
+# --- 3. FUNCIÓN DE FILTRADO MÚLTIPLE ---
+def aplicar_filtros_multiples(df, key_prefix):
+    with st.expander("🔍 **Configurar Filtros Múltiples (Buscar entre valores)**"):
+        c1, c2, c3 = st.columns(3)
+        
+        with c1:
+            busqueda_ticker = st.text_input("Filtrar por Ticker:", key=f"{key_prefix}_ticker").upper().strip()
+            min_rsi, max_rsi = st.slider("RSI (14) entre:", 0.0, 100.0, (0.0, 100.0), key=f"{key_prefix}_rsi")
+            
+        with c2:
+            val_min_vol = float(df["Volatilidad (20d) %"].min()) if not df.empty else 0.0
+            val_max_vol = float(df["Volatilidad (20d) %"].max()) if not df.empty else 100.0
+            min_vol, max_vol = st.slider("Volatilidad (20d) % entre:", val_min_vol, val_max_vol, (val_min_vol, val_max_vol), key=f"{key_prefix}_vol")
+
+            val_min_var = float(df["Var. Diaria %"].min()) if not df.empty else -20.0
+            val_max_var = float(df["Var. Diaria %"].max()) if not df.empty else 20.0
+            min_var, max_var = st.slider("Var. Diaria % entre:", val_min_var, val_max_var, (val_min_var, val_max_var), key=f"{key_prefix}_var")
+
+        with c3:
+            val_min_e150 = float(df["Dist. EMA150 %"].min()) if not df.empty else -50.0
+            val_max_e150 = float(df["Dist. EMA150 %"].max()) if not df.empty else 50.0
+            min_ema150, max_ema150 = st.slider("Dist. EMA150 % entre:", val_min_e150, val_max_e150, (val_min_e150, val_max_e150), key=f"{key_prefix}_e150")
+
+    df_filtrado = df.copy()
+
+    if busqueda_ticker:
+        df_filtrado = df_filtrado[df_filtrado["Ticker"].str.contains(busqueda_ticker)]
+
+    df_filtrado = df_filtrado[
+        (df_filtrado["RSI (14)"] >= min_rsi) & (df_filtrado["RSI (14)"] <= max_rsi) &
+        (df_filtrado["Volatilidad (20d) %"] >= min_vol) & (df_filtrado["Volatilidad (20d) %"] <= max_vol) &
+        (df_filtrado["Var. Diaria %"] >= min_var) & (df_filtrado["Var. Diaria %"] <= max_var) &
+        (df_filtrado["Dist. EMA150 %"] >= min_ema150) & (df_filtrado["Dist. EMA150 %"] <= max_ema150)
+    ]
+
+    return df_filtrado
+
+# --- 4. PROCESAMIENTO GENERAL ---
 todos_tickers = list(set(BASE_VOLATILES + st.session_state["watchlist"]))
 
 with st.spinner("Conectando con Yahoo Finance y calculando indicadores..."):
     datos_raw = descargar_datos(todos_tickers)
     df_master = procesar_indicadores(datos_raw, todos_tickers)
 
-# --- 4. INTERFAZ EN PESTAÑAS ---
+# --- 5. INTERFAZ EN PESTAÑAS ---
 tab_volatiles, tab_watchlist = st.tabs(["🔥 Top 100 Más Volátiles", "📌 Mi Watchlist Personalizada"])
 
 with tab_volatiles:
     st.subheader("Top 100 CEDEARs con Mayor Volatilidad del Mercado")
     if not df_master.empty:
         df_vol = df_master.sort_values(by="Volatilidad (20d) %", ascending=False).head(100)
-        st.caption("💡 *Hacé clic sobre la cabecera de cualquier columna para ordenar. Los encabezados se mantienen fijos al scrollear.*")
-        st.dataframe(df_vol, use_container_width=True, hide_index=True, height=600)
+        
+        # Aplicar panel de filtros
+        df_vol_filtrado = aplicar_filtros_multiples(df_vol, key_prefix="top100")
+        
+        st.caption(f"Showing **{len(df_vol_filtrado)}** de {len(df_vol)} CEDEARs. Encabezados fijos al hacer scroll.")
+        st.dataframe(df_vol_filtrado, use_container_width=True, hide_index=True, height=600)
 
 with tab_watchlist:
     st.subheader("Mi Lista de Seguimiento Personalizada")
@@ -177,7 +217,10 @@ with tab_watchlist:
 
     df_watch = df_master[df_master["Ticker"].isin(st.session_state["watchlist"])].copy()
     if not df_watch.empty:
-        st.caption("💡 *Hacé clic sobre la cabecera de cualquier columna para ordenar. Los encabezados se mantienen fijos al scrollear.*")
-        st.dataframe(df_watch, use_container_width=True, hide_index=True, height=600)
+        # Aplicar panel de filtros
+        df_watch_filtrado = aplicar_filtros_multiples(df_watch, key_prefix="watchlist")
+        
+        st.caption(f"Showing **{len(df_watch_filtrado)}** de {len(df_watch)} CEDEARs en Watchlist.")
+        st.dataframe(df_watch_filtrado, use_container_width=True, hide_index=True, height=600)
     else:
         st.info("No hay tickers en tu watchlist.")
